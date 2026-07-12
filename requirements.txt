@@ -1,3 +1,4 @@
 Pillow
 imagehash
 opencv-python
+python-dotenv
