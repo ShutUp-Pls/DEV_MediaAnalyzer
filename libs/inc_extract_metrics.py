@@ -1,32 +1,22 @@
+from pathlib import Path
+
 from libs.utils.logging import Logger
+from libs.utils.errores import ErrorBase
 
 registrador = Logger.obtener_registrador(__name__)
 
-class ErrorExtraccionBase(Exception):
-    mensaje_defecto = "Error desconocido en el proceso de extracción de métricas."
-    
-    def __init__(self, mensaje=None, error_original=None):
-        self.mensaje = mensaje or self.mensaje_defecto
-        if error_original:
-            self.mensaje += f" | Detalle: {str(error_original)}"
-        super().__init__(self.mensaje)
-
-class ErrorRutaDataset(ErrorExtraccionBase):
+class ErrorRutaDataset(ErrorBase):
     mensaje_defecto = "La ruta del dataset no está configurada correctamente en las variables de entorno."
 
-class ErrorProcesarImagen(ErrorExtraccionBase):
+class ErrorProcesarImagen(ErrorBase):
     mensaje_defecto = "Fallo crítico al calcular phash o registrar la imagen en la base de datos."
 
-class ErrorProcesarVideo(ErrorExtraccionBase):
+class ErrorProcesarVideo(ErrorBase):
     mensaje_defecto = "Fallo crítico al extraer y registrar los fotogramas del video en la base de datos."
 
-class LogExtractor:
+class Eventos:
     @staticmethod
-    def error_entorno():
-        registrador.critical("Ruta de dataset invalida o faltante en las variables de entorno.")
-
-    @staticmethod
-    def inicio_flujo(ruta):
+    def inicio_flujo(ruta: str):
         registrador.info(f"Iniciando flujo de extracción de métricas para el directorio: {ruta}")
 
     @staticmethod
@@ -34,26 +24,65 @@ class LogExtractor:
         registrador.info("Flujo de extracción de métricas completado exitosamente.")
 
     @staticmethod
-    def exito_imagen(nombre):
+    def exito_imagen(nombre: str):
         registrador.info(f"Imagen procesada exitosamente: {nombre}")
 
     @staticmethod
-    def error_imagen(nombre, error):
-        registrador.error(f"Fallo al procesar la imagen {nombre}: {str(error)}")
-
-    @staticmethod
-    def exito_video(nombre, fotogramas):
+    def exito_video(nombre: str, fotogramas: int):
         registrador.info(f"Video procesado exitosamente: {nombre} | Fotogramas extraidos: {fotogramas}")
 
     @staticmethod
-    def error_video(nombre, error):
-        registrador.error(f"Fallo al procesar el video {nombre}: {str(error)}")
-
-    @staticmethod
-    def advertencia_video_corrupto(nombre):
+    def advertencia_video_corrupto(nombre: str):
         registrador.warning(f"Omitiendo video corrupto o con 0 FPS: {nombre}")
 
-class ConsultasSQLExtractor:
+    @staticmethod
+    def advertencia_workers_excedido(solicitado: int, maximo: int):
+        registrador.warning(
+            f"Se solicitaron {solicitado} workers, pero el sistema solo soporta {maximo}. "
+            f"Se limitará a {maximo}."
+        )
+
+    @staticmethod
+    def inicio_paralelo(total: int, workers: int):
+        registrador.info(f"Iniciando procesamiento paralelo de {total} archivos con {workers} workers.")
+
+    @staticmethod
+    def progreso_lote(procesados: int, total: int):
+        registrador.info(f"Progreso: {procesados}/{total} archivos procesados.")
+
+    @staticmethod
+    def error_worker(mensaje: str):
+        registrador.error(f"Error en worker: {mensaje}")
+
+    @staticmethod
+    def info_imagenes_insertadas(cantidad: int):
+        registrador.info(f"Se insertaron {cantidad} registros de imágenes.")
+
+    @staticmethod
+    def info_videos_insertados(cantidad: int):
+        registrador.info(f"Se insertaron {cantidad} registros de vídeos.")
+
+    @staticmethod
+    def sin_archivos():
+        registrador.warning("No se encontraron archivos con extensiones válidas en el dataset.")
+
+    @staticmethod
+    def creacion_directorio_bd(directorio: Path):
+        registrador.info(f"Directorio para base de datos creado: {directorio}")
+
+    @staticmethod
+    def inicio_procesamiento_archivo(nombre: str, pid: int):
+        registrador.info(f"Worker PID {pid} procesando archivo: {nombre}")
+
+    @staticmethod
+    def archivo_no_reconocido(nombre: str):
+        registrador.warning(f"Archivo ignorado (no es imagen ni video reconocible): {nombre}")
+    
+    @staticmethod
+    def advertencia_batch_size_invalido(valor: int):
+        registrador.warning(f"BATCH_SIZE inválido ({valor}), se usará 1000.")
+
+class Consultas:
     CREAR_TABLA_IMAGENES = '''
         CREATE TABLE IF NOT EXISTS imagenes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
