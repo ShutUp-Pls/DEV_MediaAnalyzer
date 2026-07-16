@@ -1,5 +1,6 @@
 import concurrent.futures
 import os
+import numpy as np
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
@@ -17,25 +18,28 @@ from libs import (
 )
 
 from libs.utils.gsqlite import gSQLite
-from libs.inc_extract_metrics import (
+from libs.inc_extract_phash import (
     Eventos,
     Consultas,
-    ErrorRutaDataset
+    ErrorRutaDataset,
+    PROCESAR_IMAGENES,
+    PROCESAR_VIDEOS
 )
 
-def _calcular_phash_imagen(ruta_archivo: Path) -> str:
-    """Calcula el phash de una imagen usando PIL."""
+def _calcular_phash_imagen(ruta_archivo: Path) -> bytes:
     with Image.open(ruta_archivo) as imagen:
-        return str(imagehash.phash(imagen))
+        hash_obj = imagehash.phash(imagen)
+        bits = hash_obj.hash.flatten().astype(np.uint8)
+        return np.packbits(bits).tobytes()
 
-def _calcular_phash_fotograma(fotograma) -> str:
-    """Convierte un fotograma de OpenCV (BGR) a PIL y calcula su phash."""
+def _calcular_phash_fotograma(fotograma) -> bytes:
     fotograma_rgb = cv2.cvtColor(fotograma, cv2.COLOR_BGR2RGB)
     imagen_pil = Image.fromarray(fotograma_rgb)
-    return str(imagehash.phash(imagen_pil))
+    hash_obj = imagehash.phash(imagen_pil)
+    bits = hash_obj.hash.flatten().astype(np.uint8)
+    return np.packbits(bits).tobytes()
 
 def _extraer_frames_video(ruta_archivo: Path, frame_skip: int) -> List[Tuple[int, str]]:
-    """Extrae fotogramas de un video, aplicando el salto frame_skip."""
     captura = cv2.VideoCapture(str(ruta_archivo))
     fps = round(captura.get(cv2.CAP_PROP_FPS))
     if fps <= 0:
@@ -60,32 +64,36 @@ def procesar_archivo(ruta_archivo: Path, frame_skip: int) -> Optional[Dict]:
     nombre = ruta_archivo.name
     Eventos.inicio_procesamiento_archivo(nombre, os.getpid())
 
-    try:
-        hash_val = _calcular_phash_imagen(ruta_archivo)
-        return {
-            "tipo": "imagen",
-            "nombre": nombre,
-            "ruta": str(ruta_archivo),
-            "datos": hash_val,
-        }
-    except Exception: pass
-
-    try:
-        frames = _extraer_frames_video(ruta_archivo, frame_skip)
-        if frames:
+    if PROCESAR_IMAGENES:
+        try:
+            hash_val = _calcular_phash_imagen(ruta_archivo)
             return {
-                "tipo": "video",
+                "tipo": "imagen",
                 "nombre": nombre,
                 "ruta": str(ruta_archivo),
-                "datos": frames,
+                "datos": hash_val,
             }
-        else:
-            Eventos.advertencia_video_corrupto(nombre)
-            return None
+        except Exception: 
+            pass
+
+    if PROCESAR_VIDEOS:
+        try:
+            frames = _extraer_frames_video(ruta_archivo, frame_skip)
+            if frames:
+                return {
+                    "tipo": "video",
+                    "nombre": nombre,
+                    "ruta": str(ruta_archivo),
+                    "datos": frames,
+                }
+            else:
+                Eventos.advertencia_video_corrupto(nombre)
+                return None
+        except Exception: 
+            pass
         
-    except Exception:
-        Eventos.archivo_no_reconocido(nombre)
-        return None
+    Eventos.archivo_no_reconocido(nombre)
+    return None
 
 class ExtractorMetricasMultimedia:
     def __init__(self) -> None:
@@ -93,11 +101,11 @@ class ExtractorMetricasMultimedia:
         self.frame_skip = FRAME_SKIP
         self.parallel_workers = PARALLEL_WORKERS
         self._validar_entorno()
+        
+        self.db_imagenes = None
+        self.db_videos = None
 
         self._crear_directorios_bd()
-
-        self.db_imagenes = gSQLite(DB_IMAGES_PATH)
-        self.db_videos = gSQLite(DB_VIDEOS_PATH)
         self._inicializar_tablas()
 
         self._ajustar_workers()
@@ -111,22 +119,30 @@ class ExtractorMetricasMultimedia:
             self.parallel_workers = 1
 
     def _crear_directorios_bd(self) -> None:
-        for ruta in (DB_IMAGES_PATH, DB_VIDEOS_PATH):
+        rutas_activas = []
+        if PROCESAR_IMAGENES: rutas_activas.append(DB_IMAGES_PATH)
+        if PROCESAR_VIDEOS: rutas_activas.append(DB_VIDEOS_PATH)
+            
+        for ruta in rutas_activas:
             directorio = ruta.parent
             if not directorio.exists():
                 directorio.mkdir(parents=True, exist_ok=True)
                 Eventos.creacion_directorio_bd(directorio)
 
     def _inicializar_tablas(self) -> None:
-        self.db_imagenes.ejecutar_escritura(Consultas.CREAR_TABLA_IMAGENES)
-        self.db_videos.ejecutar_escritura(Consultas.CREAR_TABLA_VIDEOS)
+        if PROCESAR_IMAGENES:
+            self.db_imagenes = gSQLite(DB_IMAGES_PATH)
+            self.db_imagenes.ejecutar_escritura(Consultas.CREAR_TABLA_IMAGENES)
+            
+        if PROCESAR_VIDEOS:
+            self.db_videos = gSQLite(DB_VIDEOS_PATH)
+            self.db_videos.ejecutar_escritura(Consultas.CREAR_TABLA_VIDEOS)
 
     def _validar_entorno(self) -> None:
         if not self.ruta_dataset.name or not self.ruta_dataset.exists():
             raise ErrorRutaDataset()
 
     def _recoger_archivos(self) -> List[Path]:
-        """Recoge todos los archivos (no directorios) del dataset sin filtrar por extensión."""
         archivos = []
         for raiz, _, nombres in os.walk(self.ruta_dataset):
             for nombre in nombres:
@@ -139,19 +155,19 @@ class ExtractorMetricasMultimedia:
         lotes_imagenes = []
         lotes_videos = []
         for res in resultados:
-            if res["tipo"] == "imagen":
+            if res["tipo"] == "imagen" and PROCESAR_IMAGENES:
                 lotes_imagenes.append((res["nombre"], res["ruta"], res["datos"]))
-            elif res["tipo"] == "video":
+            elif res["tipo"] == "video" and PROCESAR_VIDEOS:
                 for segundo, hash_val in res["datos"]:
                     lotes_videos.append((res["nombre"], res["ruta"], segundo, hash_val))
 
-        if lotes_imagenes:
+        if lotes_imagenes and self.db_imagenes:
             self.db_imagenes.ejecutar_escritura_many(
                 Consultas.INSERTAR_IMAGEN, lotes_imagenes
             )
             Eventos.info_imagenes_insertadas(len(lotes_imagenes))
 
-        if lotes_videos:
+        if lotes_videos and self.db_videos:
             self.db_videos.ejecutar_escritura_many(
                 Consultas.INSERTAR_VIDEO, lotes_videos
             )
@@ -200,7 +216,6 @@ class ExtractorMetricasMultimedia:
         Eventos.fin_flujo()
 
     def _procesar_secuencial(self) -> None:
-        """Procesa todos los archivos de forma secuencial (sin usar procesos)."""
         archivos = self._recoger_archivos()
         total = len(archivos)
         if total == 0:
@@ -218,7 +233,6 @@ class ExtractorMetricasMultimedia:
 
         if resultados:
             self._insertar_resultados(resultados)
-
 
 if __name__ == "__main__":
     extractor = ExtractorMetricasMultimedia()

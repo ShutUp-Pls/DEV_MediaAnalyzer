@@ -2,3 +2,9 @@ Pillow
 imagehash
 opencv-python
 python-dotenv
+numpy
+
+umap-learn
+plotly
+scikit-learn
+pillow

@@ -3,6 +3,9 @@ from pathlib import Path
 from libs.utils.logging import Logger
 from libs.utils.errores import ErrorBase
 
+PROCESAR_IMAGENES = True
+PROCESAR_VIDEOS = False
+
 registrador = Logger.obtener_registrador(__name__)
 
 class ErrorRutaDataset(ErrorBase):
@@ -88,7 +91,7 @@ class Consultas:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre_archivo TEXT UNIQUE,
             ruta_completa TEXT,
-            phash TEXT
+            phash BLOB
         )
     '''
     
@@ -98,7 +101,7 @@ class Consultas:
             nombre_archivo TEXT,
             ruta_completa TEXT,
             segundo_video INTEGER,
-            phash TEXT
+            phash BLOB
         )
     '''
     
